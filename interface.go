@@ -1,0 +1,85 @@
+package pipeline
+
+import "context"
+
+type TransformFunc[I, O any] transformFn[I, O]
+type FilterFunc[T any] filterFn[T]
+type FlatterFunc[I, O any] flatterFn[I, O]
+type KeyFunc[K comparable, T any] keyFn[K, T]
+
+type Pipeline[T any] interface {
+	Run(context.Context) ([]T, error)
+}
+
+func (p *pipeline[T]) Run(ctx context.Context) ([]T, error) {
+	return p.eval(ctx)
+}
+
+type AggregatedPair[K comparable, V any] interface {
+	Key() K
+	Values() []V
+}
+
+func (i aggregateItem[K, T]) Key() K {
+	return i.key
+}
+
+func (i aggregateItem[K, T]) Values() []T {
+	return i.value
+}
+
+func New[T any](data []T) Pipeline[T] {
+	return newPipeline(data)
+}
+
+func WithTransformer[I, O any](stageName string, p Pipeline[I], fn TransformFunc[I, O]) Pipeline[O] {
+	return withTransformerStage(stageName, p.(*pipeline[I]), transformFn[I, O](fn))
+}
+
+func WithFilter[T any](stageName string, p Pipeline[T], fn FilterFunc[T]) Pipeline[T] {
+	return withFilterStage(stageName, p.(*pipeline[T]), filterFn[T](fn))
+}
+
+func WithFlatter[I, O any](stageName string, p Pipeline[I], fn FlatterFunc[I, O]) Pipeline[O] {
+	return withFlatterStage(stageName, p.(*pipeline[I]), flatterFn[I, O](fn))
+}
+
+func WithAggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T]) Pipeline[AggregatedPair[K, T]] {
+	return withAggregatorStage(stageName, p.(*pipeline[T]), keyFn[K, T](fn))
+}
+
+func Transformer[I, O any](p Pipeline[I], fn TransformFunc[I, O]) Pipeline[O] {
+	return WithTransformer("transformation", p, fn)
+}
+
+func Filter[T any](p Pipeline[T], fn FilterFunc[T]) Pipeline[T] {
+	return WithFilter("filtration", p, fn)
+}
+
+func Flatter[I, O any](p Pipeline[I], fn FlatterFunc[I, O]) Pipeline[O] {
+	return WithFlatter("flatteration", p, fn)
+}
+
+func Aggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T]) Pipeline[AggregatedPair[K, T]] {
+	return WithAggregator("aggregation", p, fn)
+}
+
+func Split[T any](ctx context.Context, p Pipeline[T], count int) ([]Pipeline[T], error) {
+	pipelines, err := split(ctx, p.(*pipeline[T]), count)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Pipeline[T], count)
+	for i, pipeline := range pipelines {
+		out[i] = pipeline
+	}
+	return out, nil
+}
+
+func Join[T any](ctx context.Context, pipelines ...Pipeline[T]) (Pipeline[T], error) {
+	castPipelines := make([]*pipeline[T], len(pipelines))
+	for i, p := range pipelines {
+		castPipelines[i] = p.(*pipeline[T])
+	}
+	return join(ctx, castPipelines...)
+}
