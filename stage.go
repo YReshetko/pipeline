@@ -237,7 +237,7 @@ func (s *emitterStage[T]) transformation(context.Context, struct{}) (T, error) {
 // For test/debug purpose
 func (s *emitterStage[T]) verifyClosedChannel() error {
 	return errors.Join(
-		// Do not verify in channel as ti could be non-empty, but it is definitely closed, because this is the major condition to stop pipeline
+		// Do not verify in channel as this could be non-empty, but it is definitely closed, because this is the major condition to stop pipeline
 		verifyChanClosed(fmt.Sprintf("in err channel is not closed for stage: %s", s.name), s.inErr),
 		verifyChanClosed(fmt.Sprintf("context is not closed for stage: %s", s.name), s.ctx.Done()),
 	)

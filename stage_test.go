@@ -77,7 +77,7 @@ func TestTransformerStage_SimpleTransformation_Success(t *testing.T) {
 	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"1", "2", "3"}, res)
-	assert.NoError(t, s.verifyClosedChannel())
+	assert.NoError(t, ts.verifyClosedChannel())
 }
 
 func TestTransformerStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
@@ -94,7 +94,7 @@ func TestTransformerStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, retErr)
 	assert.Equal(t, []string{"1"}, res)
-	assert.NoError(t, s.verifyClosedChannel())
+	assert.NoError(t, ts.verifyClosedChannel())
 }
 
 func TestTransformerStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
@@ -113,7 +113,7 @@ func TestTransformerStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, retErr)
 	assert.Equal(t, []string{"1"}, res)
-	assert.NoError(t, s.verifyClosedChannel())
+	assert.NoError(t, ts.verifyClosedChannel())
 }
 
 func TestTransformerStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
@@ -126,7 +126,54 @@ func TestTransformerStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
 	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
 	require.NoError(t, err)
 	assert.Equal(t, []string{}, res)
-	assert.NoError(t, s.verifyClosedChannel())
+	assert.NoError(t, ts.verifyClosedChannel())
+}
+
+func TestEmitterStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i struct{}) (int, error) {
+		return 0, nil
+	})
+	// The idea, emmiter stage does not contain in err channel and doesnt start listenong errors at all
+	close(sc.inErr)
+	es := emitterStage[int]{
+		baseStage: s,
+		data: []int{1, 2, 3},
+	}
+	es.init()
+	go es.run()
+
+	res := make([]int, 0, 3)
+	for v := range sc.out {
+		res = append(res, v)
+	}
+
+
+	assert.Equal(t, []int{1, 2, 3}, res)
+	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestEmitterStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i struct{}) (int, error) {
+		return 0, nil
+	})
+	// The idea, emmiter stage does not contain in err channel and doesnt start listenong errors at all
+	close(sc.inErr)
+	es := emitterStage[int]{
+		baseStage: s,
+		data: []int{1, 2, 3},
+	}
+	es.init()
+	es.cancelFn()
+	go es.run()
+
+	res := make([]int, 0, 3)
+	for v := range sc.out {
+		res = append(res, v)
+	}
+
+
+	assert.Equal(t, []int{}, res)
+	assert.NoError(t, es.verifyClosedChannel())
 }
 
 func noErr[T any](T) error { return nil }
