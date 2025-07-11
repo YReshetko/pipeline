@@ -68,8 +68,70 @@ func TestBaseStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
+func TestTransformerStage_SimpleTransformation_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		return strconv.Itoa(i), nil
+	})
+	ts := transformerStage[int, string]{baseStage: s}
+	ts.init()
+	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "2", "3"}, res)
+	assert.NoError(t, s.verifyClosedChannel())
+}
+
+func TestTransformerStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		if i == 2 {
+			return "", retErr
+		}
+		return strconv.Itoa(i), nil
+	})
+	ts := transformerStage[int, string]{baseStage: s}
+	ts.init()
+	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1"}, res)
+	assert.NoError(t, s.verifyClosedChannel())
+}
+
+func TestTransformerStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on prev stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		return strconv.Itoa(i), nil
+	})
+	ts := transformerStage[int, string]{baseStage: s}
+	ts.init()
+	res, err := runData(ts.baseStage, sc, func(v int) error {
+		if v == 2 {
+			return retErr
+		}
+		return nil
+	}, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1"}, res)
+	assert.NoError(t, s.verifyClosedChannel())
+}
+
+func TestTransformerStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		return strconv.Itoa(i), nil
+	})
+	ts := transformerStage[int, string]{baseStage: s}
+	ts.init()
+	ts.cancelFn()
+	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, res)
+	assert.NoError(t, s.verifyClosedChannel())
+}
+
 func noErr[T any](T) error { return nil }
-func runData[I, O any](s *baseStage[I, O], sc stageChannels[I, O], errFn func(I) error, values ...I) ([]O, error) {
+
+func runData[I, O any](s baseStage[I, O], sc stageChannels[I, O], errFn func(I) error, values ...I) ([]O, error) {
 	result := make([]O, 0, len(values))
 
 	var wg sync.WaitGroup
@@ -99,7 +161,12 @@ func runData[I, O any](s *baseStage[I, O], sc stageChannels[I, O], errFn func(I)
 					sc.inErr <- err
 					return
 				}
-				sc.in <- v
+				select {
+				case <-s.ctx.Done():
+					return
+				case sc.in <- v:
+				}
+
 			}
 		}
 	}
@@ -134,7 +201,7 @@ type stageChannels[I, O any] struct {
 	out    chan O
 }
 
-func newBaseStage[I, O any](fn transformFn[I, O]) (*baseStage[I, O], stageChannels[I, O]) {
+func newBaseStage[I, O any](fn transformFn[I, O]) (baseStage[I, O], stageChannels[I, O]) {
 	ctx, cf := context.WithCancel(context.Background())
 	sc := stageChannels[I, O]{
 		in:     make(chan I),
@@ -142,7 +209,7 @@ func newBaseStage[I, O any](fn transformFn[I, O]) (*baseStage[I, O], stageChanne
 		inErr:  make(chan error),
 		outErr: make(chan error),
 	}
-	return &baseStage[I, O]{
+	return baseStage[I, O]{
 		ctx:      ctx,
 		cancelFn: cf,
 		name:     "new base stage",
