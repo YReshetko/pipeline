@@ -7,9 +7,10 @@ import (
 )
 
 type pipeline[Out any] struct {
-	// Originally items
 	stages    []stage
 	collector *collectorStage[Out]
+
+	opts options
 
 	lastOutChan chan Out
 	lastErrChan chan error
@@ -33,6 +34,7 @@ func (p *pipeline[Out]) setupCollector() {
 			name:  "collecotor",
 			inErr: p.lastErrChan,
 			in:    p.lastOutChan,
+			opts:  p.opts,
 		},
 	}
 	p.collector = &cl
@@ -69,7 +71,11 @@ func (p *pipeline[Out]) verifyClosedChannel() error {
 	return nil
 }
 
-func newPipeline[Out any](data []Out) *pipeline[Out] {
+func newPipeline[Out any](data []Out, opts ...option) *pipeline[Out] {
+	options := options{}
+	for _, o := range opts {
+		o(&options)
+	}
 	emitterOutChan := make(chan Out)
 	emitterErrChan := make(chan error)
 	emitterStage := emitterStage[Out]{
@@ -77,6 +83,7 @@ func newPipeline[Out any](data []Out) *pipeline[Out] {
 			name:   "emitter",
 			outErr: emitterErrChan,
 			out:    emitterOutChan,
+			opts:   options,
 		},
 		data: data,
 	}
@@ -84,61 +91,68 @@ func newPipeline[Out any](data []Out) *pipeline[Out] {
 		stages:      []stage{&emitterStage},
 		lastOutChan: emitterOutChan,
 		lastErrChan: emitterErrChan,
+		opts:        options,
 	}
 }
 
-func withTransformerStage[I, O any](stageName string, prevPipeleine *pipeline[I], fn transformFn[I, O]) *pipeline[O] {
+func withTransformerStage[I, O any](stageName string, prevPipeleine *pipeline[I], fn transformFn[I, O], opts ...option) *pipeline[O] {
 	return withStage(stageName, prevPipeleine, func(stg baseStage[I, O]) stage {
 		stg.transformationFn = fn
 		return &stg
-	})
+	}, opts...)
 }
 
-func withFilterStage[O any](stageName string, prevPipeleine *pipeline[O], fn filterFn[O]) *pipeline[O] {
+func withFilterStage[O any](stageName string, prevPipeleine *pipeline[O], fn filterFn[O], opts ...option) *pipeline[O] {
 	return withStage(stageName, prevPipeleine, func(stg baseStage[O, O]) stage {
 		return &filterStage[O]{
 			baseStage: stg,
 			filter:    fn,
 		}
-	})
+	}, opts...)
 }
 
-func withFlatterStage[I, O any](stageName string, prevPipeleine *pipeline[I], fn flatterFn[I, O]) *pipeline[O] {
+func withFlatterStage[I, O any](stageName string, prevPipeleine *pipeline[I], fn flatterFn[I, O], opts ...option) *pipeline[O] {
 	return withStage(stageName, prevPipeleine, func(stg baseStage[I, O]) stage {
 		return &flatterStage[I, O]{
 			baseStage: stg,
 			fn:        fn,
 		}
-	})
+	}, opts...)
 }
 
-func withAggregatorStage[K comparable, T any](stageName string, prevPipeleine *pipeline[T], fn keyFn[K, T]) *pipeline[AggregatedPair[K, T]] {
+func withAggregatorStage[K comparable, T any](stageName string, prevPipeleine *pipeline[T], fn keyFn[K, T], opts ...option) *pipeline[AggregatedPair[K, T]] {
 	return withStage(stageName, prevPipeleine, func(stg baseStage[T, AggregatedPair[K, T]]) stage {
 		return &aggregatorStage[K, T]{
 			baseStage: stg,
 			fn:        fn,
 		}
-	})
+	}, opts...)
 }
 
-func withStage[I, O any](stageName string, prevPipeleine *pipeline[I], stageConverter func(baseStage[I, O]) stage) *pipeline[O] {
-	stg, outCh, errCh := nextBaseStage[I, O](stageName, prevPipeleine)
+func withStage[I, O any](stageName string, prevPipeleine *pipeline[I], stageConverter func(baseStage[I, O]) stage, opts ...option) *pipeline[O] {
+	stg, outCh, errCh := nextBaseStage[I, O](stageName, prevPipeleine, opts...)
 	return &pipeline[O]{
 		stages:      append(prevPipeleine.stages, stageConverter(stg)),
 		lastOutChan: outCh,
 		lastErrChan: errCh,
+		opts:        prevPipeleine.opts,
 	}
 }
 
-func nextBaseStage[I, O any](stageName string, prevPipeleine *pipeline[I]) (baseStage[I, O], chan O, chan error) {
+func nextBaseStage[I, O any](stageName string, prevPipeleine *pipeline[I], opts ...option) (baseStage[I, O], chan O, chan error) {
 	outCh := make(chan O)
 	errCh := make(chan error)
+	so := prevPipeleine.opts
+	for _, o := range opts {
+		o(&so)
+	}
 	return baseStage[I, O]{
 		name:   stageName,
 		inErr:  prevPipeleine.lastErrChan,
 		outErr: errCh,
 		in:     prevPipeleine.lastOutChan,
 		out:    outCh,
+		opts:   so,
 	}, outCh, errCh
 }
 
@@ -150,6 +164,7 @@ func split[T any](ctx context.Context, prevPipeline *pipeline[T], size int) ([]*
 	pipelines := make([]*pipeline[T], size)
 	for i := 0; i < size; i++ {
 		pipelines[i] = newPipeline(data)
+		pipelines[i].opts = prevPipeline.opts
 	}
 	return pipelines, nil
 }
@@ -194,5 +209,10 @@ func join[T any](ctx context.Context, pipelines ...*pipeline[T]) (*pipeline[T], 
 		return nil, errors.Join(errs...)
 	}
 
-	return newPipeline(data), nil
+	pipeline := newPipeline(data)
+	if len(pipelines) > 0 {
+		pipeline.opts = pipelines[0].opts
+	}
+
+	return pipeline, nil
 }

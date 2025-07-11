@@ -28,40 +28,40 @@ func (i aggregateItem[K, T]) Values() []T {
 	return i.value
 }
 
-func New[T any](data []T) Pipeline[T] {
-	return newPipeline(data)
+func New[T any](data []T, opts ...Option) Pipeline[T] {
+	return newPipeline(data, opts...)
 }
 
-func WithTransformer[I, O any](stageName string, p Pipeline[I], fn TransformFunc[I, O]) Pipeline[O] {
-	return withTransformerStage(stageName, p.(*pipeline[I]), transformFn[I, O](fn))
+func WithTransformer[I, O any](stageName string, p Pipeline[I], fn TransformFunc[I, O], opts ...Option) Pipeline[O] {
+	return withTransformerStage(stageName, p.(*pipeline[I]), transformFn[I, O](fn), opts...)
 }
 
-func WithFilter[T any](stageName string, p Pipeline[T], fn FilterFunc[T]) Pipeline[T] {
-	return withFilterStage(stageName, p.(*pipeline[T]), filterFn[T](fn))
+func WithFilter[T any](stageName string, p Pipeline[T], fn FilterFunc[T], opts ...Option) Pipeline[T] {
+	return withFilterStage(stageName, p.(*pipeline[T]), filterFn[T](fn), opts...)
 }
 
-func WithFlatter[I, O any](stageName string, p Pipeline[I], fn FlatterFunc[I, O]) Pipeline[O] {
-	return withFlatterStage(stageName, p.(*pipeline[I]), flatterFn[I, O](fn))
+func WithFlatter[I, O any](stageName string, p Pipeline[I], fn FlatterFunc[I, O], opts ...Option) Pipeline[O] {
+	return withFlatterStage(stageName, p.(*pipeline[I]), flatterFn[I, O](fn), opts...)
 }
 
-func WithAggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T]) Pipeline[AggregatedPair[K, T]] {
-	return withAggregatorStage(stageName, p.(*pipeline[T]), keyFn[K, T](fn))
+func WithAggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T], opts ...Option) Pipeline[AggregatedPair[K, T]] {
+	return withAggregatorStage(stageName, p.(*pipeline[T]), keyFn[K, T](fn), opts...)
 }
 
-func Transformer[I, O any](p Pipeline[I], fn TransformFunc[I, O]) Pipeline[O] {
-	return WithTransformer("transformation", p, fn)
+func Transformer[I, O any](p Pipeline[I], fn TransformFunc[I, O], opts ...Option) Pipeline[O] {
+	return WithTransformer("transformation", p, fn, opts...)
 }
 
-func Filter[T any](p Pipeline[T], fn FilterFunc[T]) Pipeline[T] {
-	return WithFilter("filtration", p, fn)
+func Filter[T any](p Pipeline[T], fn FilterFunc[T], opts ...Option) Pipeline[T] {
+	return WithFilter("filtration", p, fn, opts...)
 }
 
-func Flatter[I, O any](p Pipeline[I], fn FlatterFunc[I, O]) Pipeline[O] {
-	return WithFlatter("flatteration", p, fn)
+func Flatter[I, O any](p Pipeline[I], fn FlatterFunc[I, O], opts ...Option) Pipeline[O] {
+	return WithFlatter("flatteration", p, fn, opts...)
 }
 
-func Aggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T]) Pipeline[AggregatedPair[K, T]] {
-	return WithAggregator("aggregation", p, fn)
+func Aggregator[K comparable, T any](stageName string, p Pipeline[T], fn KeyFunc[K, T], opts ...Option) Pipeline[AggregatedPair[K, T]] {
+	return WithAggregator("aggregation", p, fn, opts...)
 }
 
 func Split[T any](ctx context.Context, p Pipeline[T], count int) ([]Pipeline[T], error) {

@@ -34,7 +34,6 @@ type aggregateItem[K comparable, T any] struct {
 	value []T
 }
 
-// Originally pipeline item
 type stage interface {
 	setContext(context.Context)
 	setCancelFunc(context.CancelFunc)
@@ -66,6 +65,8 @@ type baseStage[I, O any] struct {
 	outErr chan<- error
 	in     <-chan I
 	out    chan<- O
+
+	opts options
 
 	// state machine arguments
 	inputFinishedInterceptor state
@@ -130,7 +131,15 @@ func (s *baseStage[I, O]) handleErrorReceivedState() state {
 	}
 }
 
-func (s *baseStage[I, O]) handleTransformerState() state {
+func (s *baseStage[I, O]) handleTransformerState() (retState state) {
+	if !s.opts.noRecovery {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.outputErr = fmt.Errorf("wrap panic to error: %s", rec)
+				retState = s.sendTransformationErrorState
+			}
+		}()
+	}
 	s.output, s.outputErr = s.transformationFn(s.ctx, s.input)
 	switch {
 	case s.outputErr == nil:

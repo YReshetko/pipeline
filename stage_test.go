@@ -38,6 +38,22 @@ func TestBaseStage_ErrorOnStage(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
+func TestBaseStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		if i == 2 {
+			panic(retErr)
+		}
+		return strconv.Itoa(i), nil
+	})
+	s.init()
+	res, err := runData(s, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
+	assert.Equal(t, []string{"1"}, res)
+	assert.NoError(t, s.verifyClosedChannel())
+}
+
 func TestBaseStage_ErrorOnPrevStage(t *testing.T) {
 	retErr := errors.New("error on prev stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
@@ -93,6 +109,23 @@ func TestTransformerStage_ErrorOnStage(t *testing.T) {
 	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1"}, res)
+	assert.NoError(t, ts.verifyClosedChannel())
+}
+
+func TestTransformerStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
+		if i == 2 {
+			panic(retErr)
+		}
+		return strconv.Itoa(i), nil
+	})
+	ts := transformerStage[int, string]{baseStage: s}
+	ts.init()
+	res, err := runData(ts.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
 	assert.Equal(t, []string{"1"}, res)
 	assert.NoError(t, ts.verifyClosedChannel())
 }
@@ -209,6 +242,26 @@ func TestFilterStage_ErrorOnStage(t *testing.T) {
 	assert.NoError(t, fs.verifyClosedChannel())
 }
 
+func TestFilterStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
+	fs := filterStage[int]{
+		baseStage: s,
+		filter: func(ctx context.Context, i int) (bool, error) {
+			if i == 4 {
+				panic(retErr)
+			}
+			return i%2 == 0, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3, 4)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
+	assert.Equal(t, []int{2}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
 func TestFilterStage_ErrorOnPrevStage(t *testing.T) {
 	retErr := errors.New("error on prev stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
@@ -278,6 +331,26 @@ func TestFlatterStage_ErrorOnStage(t *testing.T) {
 	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1", "1"}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFlatterStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) { return "", nil })
+	fs := flatterStage[int, string]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) ([]string, error) {
+			if i == 2 {
+				panic(retErr)
+			}
+			return []string{strconv.Itoa(i), strconv.Itoa(i)}, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
 	assert.Equal(t, []string{"1", "1"}, res)
 	assert.NoError(t, fs.verifyClosedChannel())
 }
@@ -362,6 +435,30 @@ func TestAggregatorStage_ErrorOnStage(t *testing.T) {
 	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, retErr)
+	assert.Empty(t, res)
+	assert.NoError(t, as.verifyClosedChannel())
+}
+
+func TestAggregatorStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (AggregatedPair[string, int], error) { return nil, nil })
+	as := aggregatorStage[string, int]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) (string, error) {
+			if i == 3 {
+				panic(retErr)
+			}
+			if i%2 == 0 {
+				return "even", nil
+			}
+			return "odd", nil
+		},
+	}
+	as.init()
+
+	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
 	assert.Empty(t, res)
 	assert.NoError(t, as.verifyClosedChannel())
 }
