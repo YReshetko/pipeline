@@ -320,6 +320,96 @@ func TestFlatterStage_NextStageIsClosed(t *testing.T) {
 	assert.NoError(t, fs.verifyClosedChannel())
 }
 
+func TestAggregatorStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (AggregatedPair[string, int], error) { return nil, nil })
+	as := aggregatorStage[string, int]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) (string, error) {
+			if i%2 == 0 {
+				return "even", nil
+			}
+			return "odd", nil
+		},
+	}
+	as.init()
+	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []AggregatedPair[string, int]{
+		aggregateItem[string, int]{key: "odd", value: []int{1, 3}},
+		aggregateItem[string, int]{key: "even", value: []int{2}},
+	}, res)
+	assert.NoError(t, as.verifyClosedChannel())
+}
+
+func TestAggregatorStage_ErrorOnStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+
+	s, sc := newBaseStage(func(ctx context.Context, i int) (AggregatedPair[string, int], error) { return nil, nil })
+	as := aggregatorStage[string, int]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) (string, error) {
+			if i == 3 {
+				return "", retErr
+			}
+			if i%2 == 0 {
+				return "even", nil
+			}
+			return "odd", nil
+		},
+	}
+	as.init()
+
+	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Empty(t, res)
+	assert.NoError(t, as.verifyClosedChannel())
+}
+
+func TestAggregatorStage_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on prev stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (AggregatedPair[string, int], error) { return nil, nil })
+	as := aggregatorStage[string, int]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) (string, error) {
+			if i%2 == 0 {
+				return "even", nil
+			}
+			return "odd", nil
+		},
+	}
+	as.init()
+	res, err := runData(as.baseStage, sc, func(v int) error {
+		if v == 3 {
+			return retErr
+		}
+		return nil
+	}, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Empty(t, res)
+	assert.NoError(t, as.verifyClosedChannel())
+}
+
+func TestAggregatorStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (AggregatedPair[string, int], error) { return nil, nil })
+	as := aggregatorStage[string, int]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) (string, error) {
+			if i%2 == 0 {
+				return "even", nil
+			}
+			return "odd", nil
+		},
+	}
+	as.init()
+	as.cancelFn()
+	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Empty(t, res)
+	assert.NoError(t, as.verifyClosedChannel())
+}
+
 func noErr[T any](T) error { return nil }
 
 func runData[I, O any](s baseStage[I, O], sc stageChannels[I, O], errFn func(I) error, values ...I) ([]O, error) {
