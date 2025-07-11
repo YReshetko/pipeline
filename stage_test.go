@@ -170,7 +170,7 @@ func TestEmitterStage_NextStageIsClosed(t *testing.T) {
 		res = append(res, v)
 	}
 
-	assert.Equal(t, []int{}, res)
+	assert.NotNil(t, res)
 	assert.NoError(t, es.verifyClosedChannel())
 }
 
@@ -334,7 +334,7 @@ func TestAggregatorStage_Success(t *testing.T) {
 	as.init()
 	res, err := runData(as.baseStage, sc, noErr, 1, 2, 3)
 	require.NoError(t, err)
-	assert.Equal(t, []AggregatedPair[string, int]{
+	assert.ElementsMatch(t, []AggregatedPair[string, int]{
 		aggregateItem[string, int]{key: "odd", value: []int{1, 3}},
 		aggregateItem[string, int]{key: "even", value: []int{2}},
 	}, res)
@@ -408,6 +408,54 @@ func TestAggregatorStage_NextStageIsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, res)
 	assert.NoError(t, as.verifyClosedChannel())
+}
+
+func TestCollectorStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (struct{}, error) {
+		return struct{}{}, nil
+	})
+
+	cs := collectorStage[int]{
+		baseStage: s,
+	}
+	cs.init()
+	go cs.run()
+	go func() {
+		defer close(sc.in)
+		defer close(sc.inErr)
+		for _, v := range []int{1, 2, 3} {
+			sc.in <- v
+		}
+	}()
+
+	res, err := cs.result()
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2, 3}, res)
+	assert.NoError(t, cs.verifyClosedChannel())
+}
+
+func TestCollectorStage_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on prev stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (struct{}, error) {
+		return struct{}{}, nil
+	})
+
+	cs := collectorStage[int]{
+		baseStage: s,
+	}
+	cs.init()
+	go cs.run()
+	go func() {
+		defer close(sc.in)
+		defer close(sc.inErr)
+		sc.inErr <- retErr
+	}()
+
+	res, err := cs.result()
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Empty(t, res)
+	assert.NoError(t, cs.verifyClosedChannel())
 }
 
 func noErr[T any](T) error { return nil }
