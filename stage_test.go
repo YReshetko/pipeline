@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBaseStage_SimpleTransformation_Success(t *testing.T) {
+func TestBaseStage_Success(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
 	})
@@ -22,7 +22,7 @@ func TestBaseStage_SimpleTransformation_Success(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
-func TestBaseStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
+func TestBaseStage_ErrorOnStage(t *testing.T) {
 	retErr := errors.New("error on stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		if i == 2 {
@@ -38,7 +38,7 @@ func TestBaseStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
-func TestBaseStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
+func TestBaseStage_ErrorOnPrevStage(t *testing.T) {
 	retErr := errors.New("error on prev stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
@@ -56,7 +56,7 @@ func TestBaseStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
-func TestBaseStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
+func TestBaseStage_NextStageIsClosed(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
 	})
@@ -68,7 +68,7 @@ func TestBaseStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
 	assert.NoError(t, s.verifyClosedChannel())
 }
 
-func TestTransformerStage_SimpleTransformation_Success(t *testing.T) {
+func TestTransformerStage_Success(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
 	})
@@ -80,7 +80,7 @@ func TestTransformerStage_SimpleTransformation_Success(t *testing.T) {
 	assert.NoError(t, ts.verifyClosedChannel())
 }
 
-func TestTransformerStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
+func TestTransformerStage_ErrorOnStage(t *testing.T) {
 	retErr := errors.New("error on stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		if i == 2 {
@@ -97,7 +97,7 @@ func TestTransformerStage_SimpleTransformation_ErrorOnStage(t *testing.T) {
 	assert.NoError(t, ts.verifyClosedChannel())
 }
 
-func TestTransformerStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
+func TestTransformerStage_ErrorOnPrevStage(t *testing.T) {
 	retErr := errors.New("error on prev stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
@@ -116,7 +116,7 @@ func TestTransformerStage_SimpleTransformation_ErrorOnPrevStage(t *testing.T) {
 	assert.NoError(t, ts.verifyClosedChannel())
 }
 
-func TestTransformerStage_SimpleTransformation_NextStageIsClosed(t *testing.T) {
+func TestTransformerStage_NextStageIsClosed(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) {
 		return strconv.Itoa(i), nil
 	})
@@ -137,7 +137,7 @@ func TestEmitterStage_Success(t *testing.T) {
 	close(sc.inErr)
 	es := emitterStage[int]{
 		baseStage: s,
-		data: []int{1, 2, 3},
+		data:      []int{1, 2, 3},
 	}
 	es.init()
 	go es.run()
@@ -146,7 +146,6 @@ func TestEmitterStage_Success(t *testing.T) {
 	for v := range sc.out {
 		res = append(res, v)
 	}
-
 
 	assert.Equal(t, []int{1, 2, 3}, res)
 	assert.NoError(t, es.verifyClosedChannel())
@@ -160,7 +159,7 @@ func TestEmitterStage_NextStageIsClosed(t *testing.T) {
 	close(sc.inErr)
 	es := emitterStage[int]{
 		baseStage: s,
-		data: []int{1, 2, 3},
+		data:      []int{1, 2, 3},
 	}
 	es.init()
 	es.cancelFn()
@@ -171,9 +170,84 @@ func TestEmitterStage_NextStageIsClosed(t *testing.T) {
 		res = append(res, v)
 	}
 
-
 	assert.Equal(t, []int{}, res)
 	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestFilterStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
+	fs := filterStage[int]{
+		baseStage: s,
+		filter: func(ctx context.Context, i int) (bool, error) {
+			return i%2 == 0, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3, 4)
+	require.NoError(t, err)
+	assert.Equal(t, []int{2, 4}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFilterStage_ErrorOnStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
+	fs := filterStage[int]{
+		baseStage: s,
+		filter: func(ctx context.Context, i int) (bool, error) {
+			if i == 4 {
+				return false, retErr
+			}
+			return i%2 == 0, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3, 4)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []int{2}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFilterStage_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
+	fs := filterStage[int]{
+		baseStage: s,
+		filter: func(ctx context.Context, i int) (bool, error) {
+			if i == 4 {
+				return false, retErr
+			}
+			return i%2 == 0, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, func(v int) error {
+		if v == 4 {
+			return retErr
+		}
+		return nil
+	}, 1, 2, 3, 4)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []int{2}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFilterStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
+	fs := filterStage[int]{
+		baseStage: s,
+		filter: func(ctx context.Context, i int) (bool, error) {
+			return i%2 == 0, nil
+		},
+	}
+	fs.init()
+	fs.cancelFn()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []int{}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
 }
 
 func noErr[T any](T) error { return nil }
