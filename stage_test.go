@@ -210,14 +210,11 @@ func TestFilterStage_ErrorOnStage(t *testing.T) {
 }
 
 func TestFilterStage_ErrorOnPrevStage(t *testing.T) {
-	retErr := errors.New("error on stage")
+	retErr := errors.New("error on prev stage")
 	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) { return 0, nil })
 	fs := filterStage[int]{
 		baseStage: s,
 		filter: func(ctx context.Context, i int) (bool, error) {
-			if i == 4 {
-				return false, retErr
-			}
 			return i%2 == 0, nil
 		},
 	}
@@ -247,6 +244,79 @@ func TestFilterStage_NextStageIsClosed(t *testing.T) {
 	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
 	require.NoError(t, err)
 	assert.Equal(t, []int{}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFlatterStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) { return "", nil })
+	fs := flatterStage[int, string]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) ([]string, error) {
+			return []string{strconv.Itoa(i), strconv.Itoa(i)}, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1", "1", "2", "2", "3", "3"}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFlatterStage_ErrorOnStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) { return "", nil })
+	fs := flatterStage[int, string]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) ([]string, error) {
+			if i == 2 {
+				return nil, retErr
+			}
+			return []string{strconv.Itoa(i), strconv.Itoa(i)}, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1", "1"}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFlatterStage_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on prev stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) { return "", nil })
+	fs := flatterStage[int, string]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) ([]string, error) {
+			return []string{strconv.Itoa(i), strconv.Itoa(i)}, nil
+		},
+	}
+	fs.init()
+	res, err := runData(fs.baseStage, sc, func(v int) error {
+		if v == 2 {
+			return retErr
+		}
+		return nil
+	}, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Equal(t, []string{"1", "1"}, res)
+	assert.NoError(t, fs.verifyClosedChannel())
+}
+
+func TestFlatterStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (string, error) { return "", nil })
+	fs := flatterStage[int, string]{
+		baseStage: s,
+		fn: func(ctx context.Context, i int) ([]string, error) {
+			return []string{strconv.Itoa(i), strconv.Itoa(i)}, nil
+		},
+	}
+	fs.init()
+	fs.cancelFn()
+	res, err := runData(fs.baseStage, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, res)
 	assert.NoError(t, fs.verifyClosedChannel())
 }
 
