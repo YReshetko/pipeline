@@ -97,8 +97,11 @@ func newPipeline[Out any](data []Out, opts ...option) *pipeline[Out] {
 
 func withTransformerStage[I, O any](stageName string, prevPipeleine *pipeline[I], fn transformFn[I, O], opts ...option) *pipeline[O] {
 	return withStage(stageName, prevPipeleine, func(stg baseStage[I, O]) stage {
-		stg.transformationFn = fn
-		return &stg
+		ts := transformerStage[I, O]{
+			baseStage: stg,
+		}
+		ts.transformationFn = fn
+		return &ts
 	}, opts...)
 }
 
@@ -126,13 +129,19 @@ func withAggregatorStage[K comparable, T any](stageName string, prevPipeleine *p
 			baseStage: stg,
 			fn:        fn,
 		}
-	}, opts...)
+	}, append(opts, WithNoParallelStages())...)
 }
 
-func withStage[I, O any](stageName string, prevPipeleine *pipeline[I], stageConverter func(baseStage[I, O]) stage, opts ...option) *pipeline[O] {
+func withStage[I, O any](stageName string, prevPipeleine *pipeline[I], stageConverter stageBuilder[I, O], opts ...option) *pipeline[O] {
 	stg, outCh, errCh := nextBaseStage[I, O](stageName, prevPipeleine, opts...)
+	var nextStage stage
+	if stg.opts.parallelStages {
+		nextStage = newParallelStage(stg, stageConverter, stg.opts.parallelStagesCount)
+	} else {
+		nextStage = stageConverter(stg)
+	}
 	return &pipeline[O]{
-		stages:      append(prevPipeleine.stages, stageConverter(stg)),
+		stages:      append(prevPipeleine.stages, nextStage),
 		lastOutChan: outCh,
 		lastErrChan: errCh,
 		opts:        prevPipeleine.opts,

@@ -20,7 +20,7 @@ var (
 )
 
 // Testing purpose only
-const verifyClosedChannelTimeout = time.Microsecond * 100
+const verifyClosedChannelTimeout = time.Second
 
 var errSkip = errors.New("skip")
 
@@ -30,6 +30,8 @@ type transformFn[I, O any] stageFn[I, O]
 type filterFn[I any] stageFn[I, bool]
 type flatterFn[I, O any] stageFn[I, []O]
 type keyFn[K comparable, T any] stageFn[T, K]
+
+type stageBuilder[I, O any] func(baseStage[I, O]) stage
 
 type aggregateItem[K comparable, T any] struct {
 	key   K
@@ -180,6 +182,11 @@ func (s *baseStage[I, O]) completeState() state {
 	s.cancelFn()
 	close(s.out)
 	close(s.outErr)
+	// clean up in channels since we call s.cancelFn we are sure the previouse stage has closed out channels, so in channeld of this stage are the same
+	for range s.in {
+	}
+	for range s.inErr {
+	}
 	return nil
 }
 
@@ -455,7 +462,7 @@ type parallelStage[I, O any] struct {
 	stages []*parallelStageItem[I, O]
 }
 
-func newParallelStage[I, O any](bs baseStage[I, O], stageProducer func(baseStage[I, O]) stage, count int) stage {
+func newParallelStage[I, O any](bs baseStage[I, O], stageProducer stageBuilder[I, O], count int) stage {
 	stages := make([]*parallelStageItem[I, O], count)
 	for i := range stages {
 		outCh := make(chan O)
@@ -524,6 +531,7 @@ func (s *parallelStage[I, O]) setContext(ctx context.Context) {
 		sctx, sfn := context.WithCancel(ctx)
 		cs.stage.setContext(sctx)
 		cs.stage.setCancelFunc(sfn)
+		cs.baseStage.setContext(sctx)
 		cs.sctx = sctx
 	}
 }

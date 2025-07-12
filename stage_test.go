@@ -809,8 +809,6 @@ type stageChannels[I, O any] struct {
 	out    chan O
 }
 
-
-
 func newBaseStage[I, O any](fn transformFn[I, O]) (baseStage[I, O], stageChannels[I, O]) {
 	ctx, cf := context.WithCancel(context.Background())
 	sc := stageChannels[I, O]{
