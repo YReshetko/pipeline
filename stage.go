@@ -15,6 +15,8 @@ var (
 	_ stage = (*transformerStage[struct{}, struct{}])(nil)
 	_ stage = (*filterStage[struct{}])(nil)
 	_ stage = (*flatterStage[struct{}, struct{}])(nil)
+	_ stage = (*aggregatorStage[struct{}, struct{}])(nil)
+	_ stage = (*parallelStage[struct{}, struct{}])(nil)
 )
 
 // Testing purpose only
@@ -416,4 +418,115 @@ func (s *collectorStage[I]) verifyClosedChannel() error {
 		verifyChanClosed(fmt.Sprintf("out  channel is not closed on stage: %s", s.name), s.remOutCh),
 		verifyChanClosed(fmt.Sprintf("out error channel is not closed on stage: %s", s.name), s.remErrCh),
 	)
+}
+
+type parallelStageItem[I, O any] struct {
+	baseStage[I, O]
+	stage stage
+
+	out    chan O
+	outErr chan error
+	sctx   context.Context
+}
+
+func (s parallelStageItem[I, O]) transmitValue(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for v := range s.out {
+		s.baseStage.out <- v
+	}
+}
+
+func (s parallelStageItem[I, O]) transmitError(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for v := range s.outErr {
+		s.baseStage.outErr <- v
+	}
+}
+
+func (s parallelStageItem[I, O]) handleDone(wg *sync.WaitGroup) {
+	defer wg.Done()
+	<-s.sctx.Done()
+}
+
+type parallelStage[I, O any] struct {
+	// The stage that is embedded into all other stages of this one
+	// actually this stage is unused for now
+	baseStage[I, O]
+	stages []*parallelStageItem[I, O]
+}
+
+func newParallelStage[I, O any](bs baseStage[I, O], stageProducer func(baseStage[I, O]) stage, count int) stage {
+	stages := make([]*parallelStageItem[I, O], count)
+	for i := range stages {
+		outCh := make(chan O)
+		errCh := make(chan error)
+		sbs := bs // copy baseStage to replace out channels and contexts
+		sbs.out = outCh
+		sbs.outErr = errCh
+		stages[i] = &parallelStageItem[I, O]{
+			baseStage: bs, // original base stage
+			stage:     stageProducer(sbs),
+			out:       outCh,
+			outErr:    errCh,
+		}
+	}
+	return &parallelStage[I, O]{
+		baseStage: bs,
+		stages:    stages,
+	}
+}
+
+func (s *parallelStage[I, O]) init() {
+	for _, s := range s.stages {
+		s.stage.init()
+	}
+}
+
+func (s *parallelStage[I, O]) run() {
+	for _, s := range s.stages {
+		s.stage.run()
+	}
+	var wg sync.WaitGroup
+	count := len(s.stages)
+	wg.Add(count * 3)
+	for _, stg := range s.stages {
+		go stg.transmitValue(&wg)
+		go stg.transmitError(&wg)
+		go stg.handleDone(&wg)
+	}
+	go func() {
+		wg.Wait()
+		s.baseStage.completeState()
+	}()
+}
+
+func (s *parallelStage[I, O]) verifyClosedChannel() error {
+	var errs []error
+	for i, s := range s.stages {
+		err := s.stage.verifyClosedChannel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("error on stage of parallel stage '%d': %w", i, err))
+		}
+		err = s.baseStage.verifyClosedChannel()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("error on baseStage of parallel stage '%d': %w", i, err))
+		}
+	}
+	if err := s.baseStage.verifyClosedChannel(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func (s *parallelStage[I, O]) setContext(ctx context.Context) {
+	s.baseStage.setContext(ctx)
+	for _, cs := range s.stages {
+		sctx, sfn := context.WithCancel(ctx)
+		cs.stage.setContext(sctx)
+		cs.stage.setCancelFunc(sfn)
+		cs.sctx = sctx
+	}
+}
+func (s *parallelStage[I, O]) setCancelFunc(fn context.CancelFunc) {
+	s.baseStage.setCancelFunc(fn)
 }

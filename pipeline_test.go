@@ -48,7 +48,6 @@ func TestPipeline_ErrorOnStage(t *testing.T) {
 	assert.NoError(t, ap.verifyClosedChannel())
 }
 
-
 func TestPipeline_PanicOnStage(t *testing.T) {
 	retError := errors.New("panic on even/odd stage")
 	p := newPipeline([]int{1, 2, 3, 4, 5})
@@ -68,7 +67,6 @@ func TestPipeline_PanicOnStage(t *testing.T) {
 	assert.NoError(t, ap.verifyClosedChannel())
 }
 
-
 func TestPipeline_ContextClosed(t *testing.T) {
 	ctx, fn := context.WithCancel(context.Background())
 	fn()
@@ -87,7 +85,6 @@ func TestPipeline_ContextClosed(t *testing.T) {
 	assert.Empty(t, aggregatedPairs)
 	assert.NoError(t, ap.verifyClosedChannel())
 }
-
 
 func TestPipeline_ContextClosedDuringInvocations(t *testing.T) {
 	ctx, fn := context.WithCancel(context.Background())
@@ -122,6 +119,6 @@ func TestPipeline_PanicOnStage_NoRecovery(t *testing.T) {
 		}
 		return "odd", nil
 	})
-	assert.Panics(t, func() {ap.eval(context.Background())})
-	
+	assert.Panics(t, func() { ap.eval(context.Background()) })
+
 }

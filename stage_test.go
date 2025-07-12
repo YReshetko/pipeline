@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -555,9 +556,190 @@ func TestCollectorStage_ErrorOnPrevStage(t *testing.T) {
 	assert.NoError(t, cs.verifyClosedChannel())
 }
 
+func TestParallelStage_BaseStage_Success(t *testing.T) {
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &bs
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1, 2, 3}, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_BaseStage_ErrorOnStage(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(identityWithError[int](retErr, 2))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &bs
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.Len(t, res, 2)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_BaseStage_PanicOnStage(t *testing.T) {
+	retErr := errors.New("panic on stage")
+	s, sc := newBaseStage(identityWithPanic[int](retErr, 2))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &bs
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, retErr.Error())
+	assert.Len(t, res, 2)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_BaseStage_ErrorOnPrevStage(t *testing.T) {
+	retErr := errors.New("error on prev stage")
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &bs
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, func(v int) error {
+		if v == 3 {
+			return retErr
+		}
+		return nil
+	}, 1, 2, 3)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retErr)
+	assert.ElementsMatch(t, []int{1, 2}, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_BaseStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &bs
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	s.cancelFn()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.Empty(t, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_TransformerStage_Success(t *testing.T) {
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &transformerStage[int, int]{
+			baseStage: bs,
+		}
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1, 2, 3}, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_FilterStage_Success(t *testing.T) {
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &filterStage[int]{
+			baseStage: bs,
+			filter: func(ctx context.Context, i int) (bool, error) {
+				return i%2 == 0, nil
+			},
+		}
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{2}, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func TestParallelStage_FlatterStage_Success(t *testing.T) {
+	s, sc := newBaseStage(identityWithTimeout[int](time.Millisecond * 100))
+	ps := newParallelStage(s, func(bs baseStage[int, int]) stage {
+		return &flatterStage[int, int]{
+			baseStage: bs,
+			fn: func(ctx context.Context, i int) ([]int, error) {
+				return []int{i, i}, nil
+			},
+		}
+	}, 5)
+
+	ps.setContext(s.ctx)
+	ps.setCancelFunc(s.cancelFn)
+	ps.init()
+	res, err := runDataCtx(s.ctx, ps, sc, noErr, 1, 2, 3)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1, 1, 2, 2, 3, 3}, res)
+	assert.NoError(t, ps.verifyClosedChannel())
+}
+
+func identityWithTimeout[T any](timeout time.Duration) transformFn[T, T] {
+	return func(ctx context.Context, t T) (T, error) {
+		time.Sleep(timeout)
+		return t, nil
+	}
+}
+
+func identityWithError[T any](err error, iteration int) transformFn[T, T] {
+	index := 0
+	return func(ctx context.Context, t T) (T, error) {
+		if index == iteration {
+			return t, err
+		}
+		index++
+		return t, nil
+	}
+}
+
+func identityWithPanic[T any](err error, iteration int) transformFn[T, T] {
+	index := 0
+	return func(ctx context.Context, t T) (T, error) {
+		if index == iteration {
+			panic(err)
+		}
+		index++
+		return t, nil
+	}
+}
+
 func noErr[T any](T) error { return nil }
 
+type runner interface {
+	run()
+}
+
 func runData[I, O any](s baseStage[I, O], sc stageChannels[I, O], errFn func(I) error, values ...I) ([]O, error) {
+	return runDataCtx(s.ctx, &s, sc, errFn, values...)
+}
+
+func runDataCtx[I, O any](ctx context.Context, s runner, sc stageChannels[I, O], errFn func(I) error, values ...I) ([]O, error) {
 	result := make([]O, 0, len(values))
 
 	var wg sync.WaitGroup
@@ -575,7 +757,7 @@ func runData[I, O any](s baseStage[I, O], sc stageChannels[I, O], errFn func(I) 
 		index := 0
 		for {
 			select {
-			case <-s.ctx.Done():
+			case <-ctx.Done():
 				return
 			default:
 				if index == len(values) {
@@ -588,7 +770,7 @@ func runData[I, O any](s baseStage[I, O], sc stageChannels[I, O], errFn func(I) 
 					return
 				}
 				select {
-				case <-s.ctx.Done():
+				case <-ctx.Done():
 					return
 				case sc.in <- v:
 				}
@@ -626,6 +808,8 @@ type stageChannels[I, O any] struct {
 	in     chan I
 	out    chan O
 }
+
+
 
 func newBaseStage[I, O any](fn transformFn[I, O]) (baseStage[I, O], stageChannels[I, O]) {
 	ctx, cf := context.WithCancel(context.Background())
