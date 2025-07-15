@@ -242,7 +242,7 @@ func TestPipeline_Parallel_ErrorOnStage(t *testing.T) {
 					return "even", nil
 				}
 				return "odd", nil
-			}, WithNoParallelStages())
+			})
 			aggregatedPairs, err := ap.eval(context.Background())
 			require.Error(t, err)
 			assert.ErrorIs(t, err, retError)
