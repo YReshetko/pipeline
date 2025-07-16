@@ -167,7 +167,7 @@ func TestEmitterStage_Success(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i struct{}) (int, error) {
 		return 0, nil
 	})
-	// The idea, emmiter stage does not contain in err channel and doesnt start listenong errors at all
+	// The idea, emmiter stage does not contain in err channel and doesnt start listening errors at all
 	close(sc.inErr)
 	es := emitterStage[int]{
 		baseStage: s,
@@ -189,7 +189,7 @@ func TestEmitterStage_NextStageIsClosed(t *testing.T) {
 	s, sc := newBaseStage(func(ctx context.Context, i struct{}) (int, error) {
 		return 0, nil
 	})
-	// The idea, emmiter stage does not contain in err channel and doesnt start listenong errors at all
+	// The idea, emmiter stage does not contain in err channel and doesnt start listening errors at all
 	close(sc.inErr)
 	es := emitterStage[int]{
 		baseStage: s,
@@ -205,6 +205,140 @@ func TestEmitterStage_NextStageIsClosed(t *testing.T) {
 	}
 
 	assert.NotNil(t, res)
+	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestEmitterChanStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) {
+		return 0, nil
+	})
+
+	go func() {
+		defer close(sc.in)
+		for i := 0; i < 10; i++ {
+			sc.in <- i
+		}
+	}()
+
+	// The idea, emmiter stage does not contain in err channel and doesnt start listening errors at all
+	close(sc.inErr)
+	es := emitterChanStage[int]{
+		baseStage: s,
+	}
+
+	es.init()
+	go es.run()
+
+	var res []int
+	for v := range sc.out {
+		res = append(res, v)
+	}
+
+	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, res)
+	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestEmitterChanStage_ErrorOnInput(t *testing.T) {
+	retErr := errors.New("error on stage")
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) {
+		return 0, nil
+	})
+
+	go func() {
+		defer close(sc.in)
+		defer close(sc.inErr)
+		for i := 0; i < 10; i++ {
+			if i == 5 {
+				sc.inErr <- retErr
+				return
+			}
+			sc.in <- i
+		}
+	}()
+
+	// The idea, emmiter stage does not contain in err channel and doesnt start listening errors at all
+	//close(sc.inErr)
+	es := emitterChanStage[int]{
+		baseStage: s,
+	}
+
+	es.init()
+	go es.run()
+
+	var res []int
+	var resErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for v := range sc.out {
+			res = append(res, v)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for err := range sc.outErr {
+			resErr = err
+		}
+	}()
+
+	wg.Wait()
+	assert.ErrorIs(t, resErr, retErr)
+	assert.Equal(t, []int{0, 1, 2, 3, 4}, res)
+	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestEmitterChanStage_NextStageIsClosed(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) {
+		return 0, nil
+	})
+
+	go func() {
+		defer close(sc.in)
+		defer close(sc.inErr)
+		for i := 0; i < 10; i++ {
+			select {
+			case sc.in <- i:
+			case <-s.ctx.Done():
+				return
+			}
+
+		}
+	}()
+
+	es := emitterChanStage[int]{
+		baseStage: s,
+	}
+
+	es.init()
+	es.cancelFn()
+	go es.run()
+
+	res := make([]int, 0, 3)
+	for v := range sc.out {
+		res = append(res, v)
+	}
+
+	assert.NotNil(t, res)
+	assert.NoError(t, es.verifyClosedChannel())
+}
+
+func TestEmitterFailedStage_Success(t *testing.T) {
+	s, sc := newBaseStage(func(ctx context.Context, i int) (int, error) {
+		return 0, nil
+	})
+
+	es := emitterFailedStage[int]{
+		baseStage: s,
+	}
+
+	es.init()
+	go es.run()
+
+	err := <-sc.outErr
+
+	assert.ErrorIs(t, err, errUnknownDataSource)
 	assert.NoError(t, es.verifyClosedChannel())
 }
 

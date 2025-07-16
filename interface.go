@@ -28,8 +28,8 @@ func (i aggregateItem[K, T]) Values() []T {
 	return i.value
 }
 
-func New[T any](data []T, opts ...Option) Pipeline[T] {
-	return newPipeline(data, opts...)
+func New[T any, Source dataSource[T]](data Source, opts ...Option) Pipeline[T] {
+	return newPipeline[T](data, opts...)
 }
 
 func WithTransformer[I, O any](stageName string, p Pipeline[I], fn TransformFunc[I, O], opts ...Option) Pipeline[O] {

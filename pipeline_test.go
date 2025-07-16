@@ -11,7 +11,7 @@ import (
 )
 
 func TestPipeline_Success(t *testing.T) {
-	p := newPipeline([]int{1, 2, 3, 4, 5})
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5})
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
@@ -32,7 +32,7 @@ func TestPipeline_Success(t *testing.T) {
 
 func TestPipeline_ErrorOnStage(t *testing.T) {
 	retError := errors.New("error on double stage")
-	p := newPipeline([]int{1, 2, 3, 4, 5})
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5})
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, retError })
@@ -51,7 +51,7 @@ func TestPipeline_ErrorOnStage(t *testing.T) {
 
 func TestPipeline_PanicOnStage(t *testing.T) {
 	retError := errors.New("panic on even/odd stage")
-	p := newPipeline([]int{1, 2, 3, 4, 5})
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5})
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
@@ -71,7 +71,7 @@ func TestPipeline_PanicOnStage(t *testing.T) {
 func TestPipeline_ContextClosed(t *testing.T) {
 	ctx, fn := context.WithCancel(context.Background())
 	fn()
-	p := newPipeline([]int{1, 2, 3, 4, 5})
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5})
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
@@ -89,7 +89,7 @@ func TestPipeline_ContextClosed(t *testing.T) {
 
 func TestPipeline_ContextClosedDuringInvocations(t *testing.T) {
 	ctx, fn := context.WithCancel(context.Background())
-	p := newPipeline([]int{1, 2, 3, 4, 5})
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5})
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
@@ -110,7 +110,7 @@ func TestPipeline_PanicOnStage_NoRecovery(t *testing.T) {
 	// Verfies that noRecovery option warks, can be run manually
 	t.Skip()
 	retError := errors.New("panic on even/odd stage")
-	p := newPipeline([]int{1, 2, 3, 4, 5}, WithNoRecoveryOption())
+	p := newPipeline[int]([]int{1, 2, 3, 4, 5}, WithNoRecoveryOption())
 	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
 	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
 	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
@@ -121,6 +121,57 @@ func TestPipeline_PanicOnStage_NoRecovery(t *testing.T) {
 		return "odd", nil
 	})
 	assert.Panics(t, func() { ap.eval(context.Background()) })
+}
+
+func TestPipeline_ChanEmitter_Success(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		defer close(ch)
+		for i := 1; i <= 5; i++ {
+			ch <- i
+		}
+	}()
+	p := newPipeline[int](ch)
+	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
+	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
+	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, nil })
+	ap := withAggregatorStage("even/odd", p, func(ctx context.Context, v int) (string, error) {
+		if v%2 == 0 {
+			return "even", nil
+		}
+		return "odd", nil
+	})
+	aggregatedPairs, err := ap.eval(context.Background())
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []AggregatedPair[string, int]{
+		aggregateItem[string, int]{key: "even", value: []int{6, 6, 12, 12}},
+		aggregateItem[string, int]{key: "odd", value: []int{3, 3, 15, 15}},
+	}, aggregatedPairs)
+	assert.NoError(t, ap.verifyClosedChannel())
+}
+
+func TestPipeline_ChanEmitter_ErrorOnStage(t *testing.T) {
+	ch := make(chan int, 5)
+	for i := 1; i <= 5; i++ {
+		ch <- i
+	}
+	close(ch)
+	retError := errors.New("error on double stage")
+	p := newPipeline[int](ch)
+	p = withFilterStage("remove 3", p, func(ctx context.Context, v int) (bool, error) { return v != 3, nil })
+	p = withTransformerStage("mul 3", p, func(ctx context.Context, v int) (int, error) { return v * 3, nil })
+	p = withFlatterStage("doubled", p, func(ctx context.Context, v int) ([]int, error) { return []int{v, v}, retError })
+	ap := withAggregatorStage("even/odd", p, func(ctx context.Context, v int) (string, error) {
+		if v%2 == 0 {
+			return "even", nil
+		}
+		return "odd", nil
+	})
+	aggregatedPairs, err := ap.eval(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, retError)
+	assert.Empty(t, aggregatedPairs)
+	assert.NoError(t, ap.verifyClosedChannel())
 }
 
 func TestPipeline_Parallel_Success(t *testing.T) {
@@ -160,7 +211,7 @@ func TestPipeline_Parallel_Success(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			p := newPipeline(data, testCase.opts...)
+			p := newPipeline[int](data, testCase.opts...)
 			p = withFilterStage("mod 25", p, func(ctx context.Context, v int) (bool, error) {
 				time.Sleep(delay)
 				return v%25 == 0, nil
@@ -228,7 +279,7 @@ func TestPipeline_Parallel_ErrorOnStage(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			p := newPipeline(data, testCase.opts...)
+			p := newPipeline[int](data, testCase.opts...)
 			p = withFilterStage("mod 25", p, func(ctx context.Context, v int) (bool, error) {
 				if v == 75 {
 					return false, retError

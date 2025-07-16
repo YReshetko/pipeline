@@ -6,6 +6,10 @@ import (
 	"sync"
 )
 
+type dataSource[T any] interface {
+	~chan T | ~[]T
+}
+
 type pipeline[Out any] struct {
 	stages    []stage
 	collector *collectorStage[Out]
@@ -71,27 +75,54 @@ func (p *pipeline[Out]) verifyClosedChannel() error {
 	return nil
 }
 
-func newPipeline[Out any](data []Out, opts ...option) *pipeline[Out] {
+func newPipeline[Out any, Source dataSource[Out]](data Source, opts ...option) *pipeline[Out] {
 	options := options{}
 	for _, o := range opts {
 		o(&options)
 	}
 	emitterOutChan := make(chan Out)
 	emitterErrChan := make(chan error)
-	emitterStage := emitterStage[Out]{
-		baseStage: baseStage[struct{}, Out]{
-			name:   "emitter",
-			outErr: emitterErrChan,
-			out:    emitterOutChan,
-			opts:   options,
-		},
-		data: data,
-	}
 	return &pipeline[Out]{
-		stages:      []stage{&emitterStage},
+		stages:      []stage{emitterStageByDataSource(data, emitterOutChan, emitterErrChan, options)},
 		lastOutChan: emitterOutChan,
 		lastErrChan: emitterErrChan,
 		opts:        options,
+	}
+}
+
+func emitterStageByDataSource[Out any](source any, outCh chan Out, errCh chan error, opts options) stage {
+	sliceDataSource, ok := source.([]Out)
+	if ok {
+		return &emitterStage[Out]{
+			baseStage: baseStage[struct{}, Out]{
+				name:   "emitter",
+				outErr: errCh,
+				out:    outCh,
+				opts:   opts,
+			},
+			data: sliceDataSource,
+		}
+	}
+
+	bs := baseStage[Out, Out]{
+		name:   "emitter",
+		outErr: errCh,
+		out:    outCh,
+		opts:   opts,
+	}
+	chanDataSource, ok := source.(chan Out)
+	if ok {
+		inErrCh := make(chan error)
+		close(inErrCh)
+		bs.in = chanDataSource
+		bs.inErr = inErrCh
+		return &emitterChanStage[Out]{
+			baseStage: bs,
+		}
+	}
+
+	return &emitterFailedStage[Out]{
+		baseStage: bs,
 	}
 }
 
@@ -172,7 +203,7 @@ func split[T any](ctx context.Context, prevPipeline *pipeline[T], size int) ([]*
 	}
 	pipelines := make([]*pipeline[T], size)
 	for i := 0; i < size; i++ {
-		pipelines[i] = newPipeline(data)
+		pipelines[i] = newPipeline[T, []T](data)
 		pipelines[i].opts = prevPipeline.opts
 	}
 	return pipelines, nil
@@ -218,7 +249,7 @@ func join[T any](ctx context.Context, pipelines ...*pipeline[T]) (*pipeline[T], 
 		return nil, errors.Join(errs...)
 	}
 
-	pipeline := newPipeline(data)
+	pipeline := newPipeline[T, []T](data)
 	if len(pipelines) > 0 {
 		pipeline.opts = pipelines[0].opts
 	}

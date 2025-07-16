@@ -22,7 +22,10 @@ var (
 // Testing purpose only
 const verifyClosedChannelTimeout = time.Second
 
-var errSkip = errors.New("skip")
+var (
+	errSkip              = errors.New("skip")
+	errUnknownDataSource = errors.New("unknown data source")
+)
 
 type stageFn[In, Out any] func(context.Context, In) (Out, error)
 
@@ -74,6 +77,7 @@ type baseStage[I, O any] struct {
 
 	// state machine arguments
 	inputFinishedInterceptor state
+	errorFinishedInterceptor state
 	transformationFn         transformFn[I, O]
 	input                    I
 	inputReceived            bool
@@ -98,10 +102,10 @@ func (s *baseStage[I, O]) waitState() state {
 	select {
 	case <-s.ctx.Done():
 		return s.completeState
-	case s.input, s.inputReceived = <-s.in:
-		return s.handleInputReceivedState
 	case s.chErr, s.errReceived = <-s.inErr:
 		return s.handleErrorReceivedState
+	case s.input, s.inputReceived = <-s.in:
+		return s.handleInputReceivedState
 	}
 }
 
@@ -175,6 +179,9 @@ func (s *baseStage[I, O]) sendTransformationErrorState() state {
 
 func (s *baseStage[I, O]) transferErrorState() state {
 	s.outErr <- s.chErr
+	if s.errorFinishedInterceptor != nil {
+		return s.errorFinishedInterceptor
+	}
 	return s.completeState
 }
 
@@ -182,11 +189,6 @@ func (s *baseStage[I, O]) completeState() state {
 	s.cancelFn()
 	close(s.out)
 	close(s.outErr)
-	// clean up in channels since we call s.cancelFn we are sure the previouse stage has closed out channels, so in channeld of this stage are the same
-	for range s.in {
-	}
-	for range s.inErr {
-	}
 	return nil
 }
 
@@ -212,16 +214,65 @@ func verifyChanClosed[T any](msg string, ch <-chan T) error {
 	if ch == nil {
 		return nil
 	}
+
 	ticker := time.NewTicker(verifyClosedChannelTimeout)
-	select {
-	case v, ok := <-ch:
-		if ok {
-			return fmt.Errorf(msg+": has element: %+v", v)
+	var leftElements []T
+	for {
+		select {
+		case v, ok := <-ch:
+			if ok {
+				leftElements = append(leftElements, v)
+				break
+			}
+			return nil
+		case <-ticker.C:
+			if len(leftElements) > 0 {
+				return fmt.Errorf("%s: is blocked more than %d ms, left elements: %+v", msg, verifyClosedChannelTimeout.Milliseconds(), leftElements)
+			}
+			return fmt.Errorf("%s: is blocked more than %d ms", msg, verifyClosedChannelTimeout.Milliseconds())
 		}
-		return nil
-	case <-ticker.C:
-		return fmt.Errorf("%s: is blocked more than %d ms", msg, verifyClosedChannelTimeout.Milliseconds())
 	}
+
+}
+
+type emitterFailedStage[T any] struct {
+	baseStage[T, T]
+	inChan chan T
+}
+
+func (s *emitterFailedStage[T]) init() {
+	s.baseStage.init()
+	errChan := make(chan error, 1)
+	errChan <- errUnknownDataSource
+	close(errChan)
+	s.inChan = make(chan T)
+	s.transformationFn = s.transformation
+	s.errorFinishedInterceptor = s.finishedInterceptor
+	s.inErr = errChan
+	s.in = s.inChan
+}
+
+func (s *emitterFailedStage[T]) transformation(context.Context, T) (T, error) {
+	var zeroValue T
+	return zeroValue, nil
+}
+
+func (s *emitterFailedStage[T]) finishedInterceptor() state {
+	close(s.inChan)
+	return s.completeState
+}
+
+type emitterChanStage[T any] struct {
+	baseStage[T, T]
+}
+
+func (s *emitterChanStage[T]) init() {
+	s.baseStage.init()
+	s.transformationFn = s.transformation
+}
+
+func (s *emitterChanStage[T]) transformation(_ context.Context, v T) (T, error) {
+	return v, nil
 }
 
 type emitterStage[T any] struct {
